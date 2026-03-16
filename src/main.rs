@@ -1,125 +1,84 @@
-use gst::{MessageType, prelude::*};
+use anyhow::Error;
+use glib::FlagsClass;
+use gst::prelude::*;
 
-fn tutorial_main() {
-    // Initialize GStreamer
-    if let Err(err) = gst::init() {
-        eprintln!("Failed to initialize Gst: {err}");
-        return;
+fn filter_vis_features(feature: &gst::PluginFeature) -> bool {
+    match feature.downcast_ref::<gst::ElementFactory>() {
+        Some(factory) => {
+            let klass = factory.klass();
+            klass.contains("Visualization")
+        }
+        None => false,
     }
+}
 
-    let audio_source = gst::ElementFactory::make("audiotestsrc")
-        .name("audio_source")
-        .property("freq", 215.0)
-        .build()
-        .unwrap();
-    let tee = gst::ElementFactory::make("tee")
-        .name("tee")
-        .build()
-        .unwrap();
-    let audio_queue = gst::ElementFactory::make("queue")
-        .name("audio_queue")
-        .build()
-        .unwrap();
-    let audio_convert = gst::ElementFactory::make("audioconvert")
-        .name("audio_convert")
-        .build()
-        .unwrap();
-    let audio_resample = gst::ElementFactory::make("audioresample")
-        .name("audio_resample")
-        .build()
-        .unwrap();
-    let audio_sink = gst::ElementFactory::make("autoaudiosink")
-        .name("audio_sink")
-        .build()
-        .unwrap();
-    let video_queue = gst::ElementFactory::make("queue")
-        .name("video_queue")
-        .build()
-        .unwrap();
-    let visual = gst::ElementFactory::make("wavescope")
-        .name("visual")
-        .property_from_str("shader", "none")
-        .property_from_str("style", "lines")
-        .build()
-        .unwrap();
-    let video_convert = gst::ElementFactory::make("videoconvert")
-        .name("video_convert")
-        .build()
-        .unwrap();
-    let video_sink = gst::ElementFactory::make("autovideosink")
-        .name("video_sink")
-        .build()
-        .unwrap();
+fn tutorial_main() -> Result<(), Error> {
+    // Initialize GStreamer
+    gst::init()?;
 
-    let pipeline = gst::Pipeline::with_name("test-pipeline");
+    // Get a list of all visualization plugins
+    let registry = gst::Registry::get();
+    let list = registry.features_filtered(&filter_vis_features, false);
+    let mut selected_factory: Option<gst::ElementFactory> = None;
 
-    pipeline
-        .add_many([
-            &audio_source,
-            &tee,
-            &audio_queue,
-            &audio_convert,
-            &audio_resample,
-            &audio_sink,
-            &video_queue,
-            &visual,
-            &video_convert,
-            &video_sink,
-        ])
-        .unwrap();
+    // Print their names
+    println!("Available visualization plugins:");
+    for feature in list {
+        let factory = feature.downcast::<gst::ElementFactory>().unwrap();
+        let name = factory.longname();
+        println!("  {name}");
 
-    gst::Element::link_many([&audio_source, &tee]).unwrap();
-    gst::Element::link_many([&audio_queue, &audio_convert, &audio_resample, &audio_sink]).unwrap();
-    gst::Element::link_many([&video_queue, &visual, &video_convert, &video_sink]).unwrap();
-
-    let tee_audio_pad = tee.request_pad_simple("src_%u").unwrap();
-    println!(
-        "Obtained request pad {} for audio branch",
-        tee_audio_pad.name()
-    );
-    let queue_audio_pad = audio_queue.static_pad("sink").unwrap();
-    tee_audio_pad.link(&queue_audio_pad).unwrap();
-
-    let tee_video_pad = tee.request_pad_simple("src_%u").unwrap();
-    println!(
-        "Obtained request pad {} for video branch",
-        tee_video_pad.name()
-    );
-    let queue_video_pad = video_queue.static_pad("sink").unwrap();
-    tee_video_pad.link(&queue_video_pad).unwrap();
-
-    pipeline
-        .set_state(gst::State::Playing)
-        .expect("Unable to set the pipeline to the `Playing` state");
-    let bus = pipeline.bus().unwrap();
-    for msg in bus.iter_timed_filtered(
-        gst::ClockTime::NONE,
-        &[MessageType::Error, MessageType::Eos],
-    ) {
-        use gst::MessageView;
-
-        match msg.view() {
-            MessageView::Error(err) => {
-                eprintln!(
-                    "Error received from element {:?}: {}",
-                    err.src().map(|s| s.path_string()),
-                    err.error()
-                );
-                eprintln!("Debugging information: {:?}", err.debug());
-                break;
-            }
-            MessageView::Eos(..) => break,
-            _ => (),
+        if selected_factory.is_none() && name.starts_with("Monoscope") {
+            selected_factory = Some(factory);
         }
     }
 
-    pipeline
-        .set_state(gst::State::Null)
-        .expect("Unable to set the pipeline to the `Null` state");
+    // Don't proceed if no visualization plugins were found
+    let vis_factory = selected_factory.expect("No visualization plugins found.");
+
+    // We have now selected a factory for the visualization element
+    let name = vis_factory.longname();
+    println!("Selected {name}");
+    let vis_plugin = vis_factory.create().build().unwrap();
+
+    // Build the pipeline
+    let pipeline = gst::parse::launch("playbin uri=http://radio.hbr1.com:19800/ambient.ogg")?;
+
+    // Set the visualization flag
+    let flags = pipeline.property_value("flags");
+    let flags_class = FlagsClass::with_type(flags.type_()).unwrap();
+    let flags = flags_class
+        .builder_with_value(flags)
+        .unwrap()
+        .set_by_nick("vis")
+        .build()
+        .unwrap();
+    pipeline.set_property_from_value("flags", &flags);
+
+    // Set vis plugin for playbin2
+    pipeline.set_property("vis-plugin", &vis_plugin);
+
+    // Start playing
+    pipeline.set_state(gst::State::Playing)?;
+
+    // Wait until an EOS or error message appears
+    let bus = pipeline.bus().unwrap();
+    let _msg = bus.timed_pop_filtered(
+        gst::ClockTime::NONE,
+        &[gst::MessageType::Error, gst::MessageType::Eos],
+    );
+
+    // Clean up
+    pipeline.set_state(gst::State::Null)?;
+
+    Ok(())
 }
 
 fn main() {
     // tutorials_common::run is only required to set up the application environment on macOS
     // (but not necessary in normal Cocoa applications where this is set up automatically)
-    tutorial_main();
+    match tutorial_main() {
+        Ok(_) => {}
+        Err(err) => eprintln!("Failed: {err}"),
+    };
 }
