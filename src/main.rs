@@ -11,37 +11,37 @@ fn tutorial_main() -> Result<(), Error> {
     )?;
 
     // Create elements that go inside the sink bin
-    let equalizer = gst::ElementFactory::make("equalizer-3bands")
-        .name("equalizer")
+    let video_effect = gst::ElementFactory::make("solarize")
+        .name("video_effect")
         .build()
-        .expect("Could not create equalizer element.");
-    let convert = gst::ElementFactory::make("audioconvert")
+        .expect("Could not create video effect element.");
+    let convert = gst::ElementFactory::make("videoconvert")
         .name("convert")
         .build()
-        .expect("Could not create audioconvert element.");
-    let sink = gst::ElementFactory::make("autoaudiosink")
+        .expect("Could not create videoconvert element.");
+    let sink = gst::ElementFactory::make("autovideosink")
         .name("audio_sink")
         .build()
-        .expect("Could not create autoaudiosink element.");
+        .expect("Could not create autovideosink element.");
 
     // Create the sink bin, add the elements and link them
-    let bin = gst::Bin::with_name("audio_sink_bin");
-    bin.add_many([&equalizer, &convert, &sink]).unwrap();
-    gst::Element::link_many([&equalizer, &convert, &sink]).expect("Failed to link elements.");
+    let bin = gst::Bin::with_name("video_sink_bin");
+    bin.add_many([&video_effect, &convert, &sink]).unwrap();
+    gst::Element::link_many([&video_effect, &convert, &sink]).expect("Failed to link elements.");
 
-    let pad = equalizer
+    let pad = video_effect
         .static_pad("sink")
-        .expect("Failed to get a static pad from equalizer.");
+        .expect("Failed to get a static pad from video_effect.");
     let ghost_pad = gst::GhostPad::builder_with_target(&pad).unwrap().build();
     ghost_pad.set_active(true)?;
     bin.add_pad(&ghost_pad)?;
 
     // Configure the equalizer
-    equalizer.set_property("band0", 12.0);
-    equalizer.set_property("band1", -24.0);
-    equalizer.set_property("band2", 12.0);
+    // equalizer.set_property("band0", 12.0);
+    // equalizer.set_property("band1", -24.0);
+    // equalizer.set_property("band2", 12.0);
 
-    pipeline.set_property("audio-sink", &bin);
+    pipeline.set_property("video-sink", &bin);
 
     // Set to PLAYING
     pipeline.set_state(gst::State::Playing)?;
