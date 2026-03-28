@@ -13,3 +13,7 @@ Notes
 - Audio Visualization tool: Monoscope
     - [Playback tutorial 6: Audio visualization](https://gstreamer.freedesktop.org/documentation/tutorials/playback/custom-playbin-sinks.html?gi-language=c)
 - Rust Tutorial Code: [Git](https://gitlab.freedesktop.org/gstreamer/gstreamer-rs/-/blob/main/tutorials/src/bin/basic-tutorial-7.rs?ref_type=heads)
+- Audio Effects:
+    - audioecho delay=500000000 intensity=0.6 feedback=0.4
+    - audiocheblimit mode=low-pass cutoff=1000
+    - equalizer-10bands band2=3.0

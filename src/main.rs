@@ -1,64 +1,49 @@
 use anyhow::Error;
-use glib::FlagsClass;
 use gst::prelude::*;
-
-fn filter_vis_features(feature: &gst::PluginFeature) -> bool {
-    match feature.downcast_ref::<gst::ElementFactory>() {
-        Some(factory) => {
-            let klass = factory.klass();
-            klass.contains("Visualization")
-        }
-        None => false,
-    }
-}
 
 fn tutorial_main() -> Result<(), Error> {
     // Initialize GStreamer
     gst::init()?;
 
-    // Get a list of all visualization plugins
-    let registry = gst::Registry::get();
-    let list = registry.features_filtered(&filter_vis_features, false);
-    let mut selected_factory: Option<gst::ElementFactory> = None;
-
-    // Print their names
-    println!("Available visualization plugins:");
-    for feature in list {
-        let factory = feature.downcast::<gst::ElementFactory>().unwrap();
-        let name = factory.longname();
-        println!("  {name}");
-
-        if selected_factory.is_none() && name.starts_with("Monoscope") {
-            selected_factory = Some(factory);
-        }
-    }
-
-    // Don't proceed if no visualization plugins were found
-    let vis_factory = selected_factory.expect("No visualization plugins found.");
-
-    // We have now selected a factory for the visualization element
-    let name = vis_factory.longname();
-    println!("Selected {name}");
-    let vis_plugin = vis_factory.create().build().unwrap();
-
     // Build the pipeline
-    let pipeline = gst::parse::launch("playbin uri=http://radio.hbr1.com:19800/ambient.ogg")?;
+    let pipeline = gst::parse::launch(
+        "playbin uri=https://gstreamer.freedesktop.org/data/media/sintel_trailer-480p.webm",
+    )?;
 
-    // Set the visualization flag
-    let flags = pipeline.property_value("flags");
-    let flags_class = FlagsClass::with_type(flags.type_()).unwrap();
-    let flags = flags_class
-        .builder_with_value(flags)
-        .unwrap()
-        .set_by_nick("vis")
+    // Create elements that go inside the sink bin
+    let equalizer = gst::ElementFactory::make("equalizer-3bands")
+        .name("equalizer")
         .build()
-        .unwrap();
-    pipeline.set_property_from_value("flags", &flags);
+        .expect("Could not create equalizer element.");
+    let convert = gst::ElementFactory::make("audioconvert")
+        .name("convert")
+        .build()
+        .expect("Could not create audioconvert element.");
+    let sink = gst::ElementFactory::make("autoaudiosink")
+        .name("audio_sink")
+        .build()
+        .expect("Could not create autoaudiosink element.");
 
-    // Set vis plugin for playbin2
-    pipeline.set_property("vis-plugin", &vis_plugin);
+    // Create the sink bin, add the elements and link them
+    let bin = gst::Bin::with_name("audio_sink_bin");
+    bin.add_many([&equalizer, &convert, &sink]).unwrap();
+    gst::Element::link_many([&equalizer, &convert, &sink]).expect("Failed to link elements.");
 
-    // Start playing
+    let pad = equalizer
+        .static_pad("sink")
+        .expect("Failed to get a static pad from equalizer.");
+    let ghost_pad = gst::GhostPad::builder_with_target(&pad).unwrap().build();
+    ghost_pad.set_active(true)?;
+    bin.add_pad(&ghost_pad)?;
+
+    // Configure the equalizer
+    equalizer.set_property("band0", 12.0);
+    equalizer.set_property("band1", -24.0);
+    equalizer.set_property("band2", 12.0);
+
+    pipeline.set_property("audio-sink", &bin);
+
+    // Set to PLAYING
     pipeline.set_state(gst::State::Playing)?;
 
     // Wait until an EOS or error message appears
